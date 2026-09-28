@@ -16,10 +16,6 @@ BLOCKED = "**ʙᴇᴇᴘ ʙᴏᴏᴘ ꜰᴏᴜɴᴅᴇᴅ ᴀ ꜱᴘᴀᴍᴍᴇ
 
 LIMIT = 5
 
-# Users who have already received the automatic first-DM message.
-# Stored in MongoDB so the message is sent only once even after restart.
-GREETED_COLLECTION = collection
-
 
 async def set_pm(value: bool):
     doc = {"_id": 1, "pmpermit": value}
@@ -87,20 +83,15 @@ async def pm_guard():
     else:
         return True
 
+# Persistent record of users who already received the one-time DM promotion.
+PROMO_SENT_COLLECTION = cli["Shashank"]["pm_promo_sent"]
 
-async def has_received_first_dm(chat_id):
-    """Return True if the user has already received the first-DM message."""
-    doc = await GREETED_COLLECTION.find_one({"_id": "FirstDM"})
-    return bool(doc and chat_id in doc.get("users", []))
+async def promo_was_sent(chat_id):
+    return bool(await PROMO_SENT_COLLECTION.find_one({"_id": int(chat_id)}))
 
-
-async def mark_first_dm(chat_id):
-    """Persist that the first-DM message has been sent to this user."""
-    doc = await GREETED_COLLECTION.find_one({"_id": "FirstDM"})
-    if doc:
-        await GREETED_COLLECTION.update_one(
-            {"_id": "FirstDM"},
-            {"$addToSet": {"users": chat_id}},
-        )
-    else:
-        await GREETED_COLLECTION.insert_one({"_id": "FirstDM", "users": [chat_id]})
+async def mark_promo_sent(chat_id):
+    await PROMO_SENT_COLLECTION.update_one(
+        {"_id": int(chat_id)},
+        {"$set": {"sent": True}},
+        upsert=True,
+    )
