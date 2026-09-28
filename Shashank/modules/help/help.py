@@ -33,7 +33,7 @@ HELP_MENU = r"""<blockquote>| ❁ ＷＡＳＴＥ Ｘ ＵＢＯＴ - ＨＥＬ�
 | upload                | vctools                |
 | vulgar                | waifu                  |
 | weather               | VcFight                |
-| promotion             | None                   |
+| promotion             | aichat                 |
 +-----------------------+------------------------+
 • @II_JPEXO_II × @JP_NETWORK .</blockquote>"""
 

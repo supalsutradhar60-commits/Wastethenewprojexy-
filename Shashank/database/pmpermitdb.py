@@ -16,6 +16,10 @@ BLOCKED = "**ʙᴇᴇᴘ ʙᴏᴏᴘ ꜰᴏᴜɴᴅᴇᴅ ᴀ ꜱᴘᴀᴍᴍᴇ
 
 LIMIT = 5
 
+# Users who have already received the automatic first-DM message.
+# Stored in MongoDB so the message is sent only once even after restart.
+GREETED_COLLECTION = collection
+
 
 async def set_pm(value: bool):
     doc = {"_id": 1, "pmpermit": value}
@@ -82,3 +86,21 @@ async def pm_guard():
         return False
     else:
         return True
+
+
+async def has_received_first_dm(chat_id):
+    """Return True if the user has already received the first-DM message."""
+    doc = await GREETED_COLLECTION.find_one({"_id": "FirstDM"})
+    return bool(doc and chat_id in doc.get("users", []))
+
+
+async def mark_first_dm(chat_id):
+    """Persist that the first-DM message has been sent to this user."""
+    doc = await GREETED_COLLECTION.find_one({"_id": "FirstDM"})
+    if doc:
+        await GREETED_COLLECTION.update_one(
+            {"_id": "FirstDM"},
+            {"$addToSet": {"users": chat_id}},
+        )
+    else:
+        await GREETED_COLLECTION.insert_one({"_id": "FirstDM", "users": [chat_id]})

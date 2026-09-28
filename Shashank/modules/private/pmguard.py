@@ -4,7 +4,7 @@ from pyrogram import filters, Client
 import asyncio
 from pyrogram.types import Message 
 from pyrogram.methods import messages
-from Shashank.database.pmpermitdb import get_approved_users, pm_guard
+from Shashank.database.pmpermitdb import get_approved_users, pm_guard, has_received_first_dm, mark_first_dm
 import Shashank.database.pmpermitdb as Shashank
 from config import LOG_GROUP, PM_LOGGER
 FLOOD_CTRL = 0
@@ -75,33 +75,30 @@ async def deny(client, message):
 
 @Client.on_message(
     filters.private
-    & filters.create(denied_users)
     & filters.incoming
     & ~filters.service
     & ~filters.me
     & ~filters.bot
 )
-async def reply_pm(app: Client, message):
-    global FLOOD_CTRL
-    pmpermit, pm_message, limit, block_message = await Shashank.get_pm_settings()
-    user = message.from_user.id
-    user_warns = 0 if user not in USERS_AND_WARNS else USERS_AND_WARNS[user]
-    if PM_LOGGER:
-        await app.send_message(PM_LOGGER, f"{message.text}")
-    if user_warns <= limit - 2:
-        user_warns += 1
-        USERS_AND_WARNS.update({user: user_warns})
-        if not FLOOD_CTRL > 0:
-            FLOOD_CTRL += 1
-        else:
-            FLOOD_CTRL = 0
-            return
-        async for message in app.search_messages(
-            chat_id=message.chat.id, query=pm_message, limit=1, from_user="me"
-        ):
-            await message.delete()
-        await message.reply(pm_message, disable_web_page_preview=True)
+async def reply_pm(app: Client, message: Message):
+    """Send the automatic DM message only once per user.
+
+    After the first message, the AI chat module can handle the conversation.
+    The old repeated-warning/block loop is intentionally not used here.
+    """
+    if await has_received_first_dm(message.chat.id):
         return
-    await message.reply(block_message, disable_web_page_preview=True)
-    await app.block_user(message.chat.id)
-    USERS_AND_WARNS.update({user: 0})
+
+    pmpermit, pm_message, limit, block_message = await Shashank.get_pm_settings()
+    if PM_LOGGER:
+        try:
+            await app.send_message(PM_LOGGER, f"{message.text or ''}")
+        except Exception:
+            pass
+
+    try:
+        await message.reply(pm_message, disable_web_page_preview=True)
+        await mark_first_dm(message.chat.id)
+    except Exception as e:
+        print(f"First DM message error: {e}")
+
