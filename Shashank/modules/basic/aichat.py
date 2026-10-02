@@ -1,4 +1,5 @@
 import os
+import re
 import aiohttp
 from pyrogram import Client, filters
 from pyrogram.types import Message
@@ -38,7 +39,17 @@ async def _set_enabled(uid, value):
         )
 
 
+# Groq on-demand has a requests-per-minute limit.  Serialize AI requests
+# and keep a small gap between them so a busy group does not immediately
+# burn through the RPM limit.
+_groq_lock = __import__("asyncio").Lock()
+_groq_next_request = 0.0
+_GROQ_MIN_INTERVAL = 2.15  # safely below 30 requests/minute
+
+
 async def _ask_groq(text):
+    global _groq_next_request
+
     if not GROQ_API_KEY:
         return "⚠️ GROQ_API_KEY is not set in Railway Variables."
 
@@ -57,17 +68,62 @@ async def _ask_groq(text):
         "max_tokens": 250,
     }
 
-    timeout = aiohttp.ClientTimeout(total=45)
-    async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.post(url, headers=headers, json=payload) as response:
-            data = await response.json(content_type=None)
-            if response.status != 200:
-                err = data.get("error", {}) if isinstance(data, dict) else {}
-                return f"⚠️ Groq error: {err.get('message', 'request failed')}"
-            choices = data.get("choices", [])
-            if not choices:
-                return "⚠️ AI did not return a reply."
-            return choices[0].get("message", {}).get("content", "").strip() or "⚠️ AI returned an empty reply."
+    # Only one request at a time, with a minimum interval between requests.
+    # This prevents multiple messages arriving together from exceeding RPM.
+    async with _groq_lock:
+        now = __import__("time").monotonic()
+        wait_for = _groq_next_request - now
+        if wait_for > 0:
+            await __import__("asyncio").sleep(wait_for)
+
+        timeout = aiohttp.ClientTimeout(total=50)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            for attempt in range(3):
+                try:
+                    async with session.post(url, headers=headers, json=payload) as response:
+                        data = await response.json(content_type=None)
+                        _groq_next_request = __import__("time").monotonic() + _GROQ_MIN_INTERVAL
+
+                        if response.status == 200:
+                            choices = data.get("choices", [])
+                            if not choices:
+                                return "⚠️ AI did not return a reply."
+                            return (
+                                choices[0].get("message", {}).get("content", "").strip()
+                                or "⚠️ AI returned an empty reply."
+                            )
+
+                        err = data.get("error", {}) if isinstance(data, dict) else {}
+                        msg = err.get("message", "request failed")
+
+                        # Groq may return a retry-after value when RPM is exceeded.
+                        if response.status == 429 and attempt < 2:
+                            retry_after = response.headers.get("retry-after")
+                            try:
+                                delay = float(retry_after)
+                            except (TypeError, ValueError):
+                                # The error text commonly says "Please try again in 2s".
+                                match = re.search(r"try again in\s+([\d.]+)s", str(msg), re.I)
+                                delay = float(match.group(1)) if match else 2.5
+                            await __import__("asyncio").sleep(min(max(delay, 2.1), 10.0))
+                            _groq_next_request = __import__("time").monotonic() + _GROQ_MIN_INTERVAL
+                            continue
+
+                        if response.status == 429:
+                            # Don't expose the raw organization/model rate-limit dump
+                            # to the Telegram chat.
+                            return "⏳ AI is busy right now. Please send your message again in a few seconds."
+
+                        return f"⚠️ Groq error: {msg}"
+
+                except (aiohttp.ClientError, __import__("asyncio").TimeoutError) as exc:
+                    if attempt < 2:
+                        await __import__("asyncio").sleep(2.0)
+                        continue
+                    print(f"AI Chat network error: {exc}")
+                    return "⚠️ AI service is temporarily unavailable. Please try again."
+
+    return "⚠️ AI service is temporarily unavailable."
 
 
 @Client.on_message(filters.command("aichat", ".") & filters.me)
