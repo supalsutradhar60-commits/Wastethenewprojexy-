@@ -18,10 +18,15 @@ SYSTEM_PROMPT = (
 )
 
 
-def _uid(client):
+async def _uid(client):
+    """Return the logged-in user id reliably, even if client.me is not cached yet."""
     try:
-        return int(client.me.id) if client.me else None
-    except Exception:
+        me = client.me
+        if me is None:
+            me = await client.get_me()
+        return int(me.id) if me else None
+    except Exception as exc:
+        print(f"AI Chat: unable to get client user id: {exc}")
         return None
 
 
@@ -128,8 +133,8 @@ async def _ask_groq(text):
 
 @Client.on_message(filters.command("aichat", ".") & filters.me)
 async def aichat_command(client: Client, message: Message):
-    uid = _uid(client)
-    args = [x.lower() for x in message.command[1:]]
+    uid = await _uid(client)
+    args = [x.lower() for x in (message.command[1:] if message.command else [])]
     action = args[0] if args else "status"
 
     if action == "on":
@@ -146,26 +151,29 @@ async def aichat_command(client: Client, message: Message):
 
 
 @Client.on_message(
-    (filters.text | filters.caption)
+    filters.incoming
+    & filters.group
+    & (filters.text | filters.caption)
     & ~filters.me
     & ~filters.bot
     & ~filters.service
-    & ~filters.command(["help", "aichat"], ".")
 )
 async def aichat_reply(client: Client, message: Message):
-    uid = _uid(client)
-    if not await _enabled(uid):
+    uid = await _uid(client)
+    if not uid or not await _enabled(uid):
         return
 
     text = message.text or message.caption
     if not text or not text.strip():
         return
 
-    # Do not answer other commands.
-    if text.lstrip().startswith("."):
+    # Never answer commands from any common Telegram command prefix.
+    stripped = text.lstrip()
+    if stripped.startswith((".", "/", "!")):
         return
 
     try:
+        print(f"AI Chat: handling message in chat={message.chat.id} from={message.from_user.id if message.from_user else 'unknown'}")
         reply = await _ask_groq(text.strip())
         if reply:
             await message.reply_text(reply, quote=True, disable_web_page_preview=True)
